@@ -11,3 +11,6 @@
 
 node_modules/
 .DS_Store
+
+# Generated deploy values. Contains test root private keys.
+vercel-env.txt
