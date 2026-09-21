@@ -379,15 +379,6 @@ function wirePhone(screen) {
   }
   if (screen === "secure") {
     var platform = $("f-platform");
-    if (!app.state.openssl) {
-      platform.value = "ios";
-      Array.prototype.forEach.call(platform.options, function (o) {
-        if (o.value === "android") {
-          o.disabled = true;
-          o.textContent = "Android (needs openssl)";
-        }
-      });
-    }
     $("do-enroll").addEventListener("click", function () {
       enroll(platform.value, $("f-currency").value);
     });

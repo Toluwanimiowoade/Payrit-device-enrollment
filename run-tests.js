@@ -110,9 +110,7 @@ function checkHardware() {
 
   var nonce = "test-nonce-" + Date.now();
 
-  if (!hardware.haveOpenssl()) {
-    skip("android attestation chain", "openssl not on PATH");
-  } else {
+  {
     var chain = hardware.issueAndroidChain(key.privatePem, nonce);
     ok("builds an attestation chain, leaf first", Array.isArray(chain) && chain.length >= 2);
     ok(
@@ -130,6 +128,36 @@ function checkHardware() {
     );
     ok("an empty chain is rejected", !hardware.verifyAndroidChain([], key.spkiB64, nonce).ok);
   }
+
+  var x509 = require("./lib/x509.js");
+  var caKey = hardware.createDeviceKey();
+  var caCert = x509.selfSign({ subject: { CN: "Suite Root" }, privateKey: caKey.privatePem, isCa: true });
+  var leafKey = hardware.createDeviceKey();
+  var leafCert = x509.issue({
+    subject: { CN: "Suite Leaf" },
+    issuerNameDer: x509.subjectNameDer(caCert),
+    subjectPublicKey: leafKey.privatePem,
+    issuerPrivateKey: caKey.privatePem
+  });
+  ok("pure-JS X.509: leaf verifies against its issuer", x509.verifySignedBy(leafCert, caCert));
+  ok(
+    "pure-JS X.509: a leaf from another CA is rejected",
+    !x509.verifySignedBy(
+      x509.issue({
+        subject: { CN: "Other" },
+        issuerNameDer: x509.subjectNameDer(caCert),
+        subjectPublicKey: leafKey.privatePem,
+        issuerPrivateKey: hardware.createDeviceKey().privatePem
+      }),
+      caCert
+    )
+  );
+  ok(
+    "pure-JS X.509: issuer name matches the CA subject byte for byte",
+    x509.parse(leafCert).issuer.toString("hex") === x509.parse(caCert).subject.toString("hex")
+  );
+  ok("pure-JS X.509: the leaf certifies the submitted key",
+    x509.parse(leafCert).spki.toString("base64") === leafKey.spkiB64);
 
   var ios = hardware.issueIosAttestation(key.privatePem, nonce, "com.payrit.harness");
   ok("builds an App Attest statement", typeof ios === "string" && ios.length > 0);

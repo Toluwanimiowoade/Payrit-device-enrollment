@@ -236,4 +236,5 @@ platforms. The pieces worth reading:
 | `lib/credential.js` | Parsing the returned credential. |
 | `server.js` | The whole sequence, in order. |
 
-It has no dependencies, so the crypto is readable rather than hidden behind a library.
+It has no dependencies and shells out to nothing — CBOR, DER and X.509 are all implemented
+directly — so the crypto is readable rather than hidden behind a library.

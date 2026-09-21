@@ -6,7 +6,6 @@ var path = require("path");
 var urllib = require("url");
 
 var state = require("./lib/state.js");
-var hardware = require("./lib/hardware.js");
 var routes = require("./lib/routes.js");
 
 var PUBLIC_DIR = path.join(__dirname, "public");
@@ -109,9 +108,6 @@ function startupBanner(port) {
   var keyLine = active
     ? state.keyPrefix(active.key) + "  (" + active.source + ")"
     : "none yet — register an account in the UI";
-  var opensslLine = hardware.haveOpenssl()
-    ? "present (android attestation path available)"
-    : "missing (use the ios path)";
 
   console.log("");
   console.log("  Payrit device-enrollment harness");
@@ -119,7 +115,6 @@ function startupBanner(port) {
   console.log("");
   console.log("  API base   " + state.apiBase());
   console.log("  API key    " + keyLine);
-  console.log("  openssl    " + opensslLine);
   console.log("  live iOS   " + (apple.ready ? "ready" : "needs " + apple.missing.join(", ")));
   console.log("  live droid " + (android.ready ? "ready" : "needs " + android.missing.join(", ")));
 

@@ -1,0 +1,11 @@
+{
+  "name": "payrit-device-enrollment-harness",
+  "version": "1.0.0",
+  "description": "Test harness for the Payrit device enrollment API",
+  "private": true,
+  "scripts": {
+    "start": "node server.js",
+    "test": "node run-tests.js"
+  },
+  "license": "MIT"
+}

@@ -113,6 +113,25 @@ though the DTO field is called `deviceId`; passing the id from inside the creden
 
 Everything except the roots is genuine: real CBOR, real DER, real X.509, real ES256.
 
+## Deploying
+
+The harness runs as a normal node process locally, and as a serverless function on Vercel —
+`api/index.js` hands requests to the same server, and `vercel.json` routes `/api/*` to it.
+
+Two things change when it is hosted:
+
+* **State is ephemeral.** `.runtime.json` and the harness PKI move to the platform's temp
+  directory (see `lib/paths.js`), so a cold start loses the bootstrapped account, the key and
+  any enrolled devices. Set `PAYRIT_API_KEY` so at least the key survives.
+* **Anyone with the URL can drive it.** It creates real customers and devices on whichever
+  deployment `PAYRIT_API_BASE` points at, using the key it holds. Keep it on a test key, and
+  treat the URL as semi-private.
+
+Environment variables to set on the host: `PAYRIT_API_KEY`, and for live enrollment the test
+roots — `PAYRIT_APPATTEST_ROOT_CERT` / `_JWK`, `PAYRIT_TEAM_ID`, `PAYRIT_BUNDLE_ID`,
+`PAYRIT_ANDROID_ROOT_CERT` / `_JWK`, `ANDROID_APP_PACKAGE`, `ANDROID_SIGNING_CERT_DIGEST`.
+All of those accept the value inline, so no files need to be deployed.
+
 ## Layout
 
 | File | Role |
@@ -129,7 +148,10 @@ Everything except the roots is genuine: real CBOR, real DER, real X.509, real ES
 | `lib/appattest.js` | Apple App Attest objects: authData, the nonce binding, the credCert. |
 | `lib/androidattest.js` | Android Key Attestation chains. |
 | `lib/keyattestation.js` | The KeyDescription ASN.1 structure and AttestationApplicationId. |
-| `lib/cbor.js`, `lib/der.js` | Minimal CBOR and DER writers, no dependencies. |
+| `lib/cbor.js`, `lib/der.js` | Minimal CBOR and DER writers and a DER reader. |
+| `lib/x509.js` | Issues and verifies X.509 certificates in pure JS — no openssl. |
+| `lib/paths.js` | Where writable state lives; redirects to tmp when serverless. |
+| `api/index.js`, `vercel.json` | Serverless entry point and routing. |
 | `lib/credential.js` | Reads the Device Credential the deployment returns. |
 
 ## Endpoints
@@ -157,8 +179,8 @@ key unless `PAYRIT_ALLOW_LIVE=yes` is set.
 
 ## Notes
 
-* `openssl` is needed for the Android attestation path. Without it the UI disables Android
-  and the iOS path still works end to end.
+* No external binaries are required. Certificates are issued and verified in pure JavaScript
+  (`lib/x509.js`), so the harness runs anywhere node does, including serverless.
 * Reset clears local state only. Accounts, keys and customers already created on the
   deployment stay there — the bootstrap route will not re-open for an account that already
   has a key, so a reset always registers a fresh account.
