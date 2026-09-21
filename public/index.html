@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Payrit device enrollment — harness</title>
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <h1>Payrit device enrollment</h1>
+    <span>test harness</span>
+  </div>
+
+  <div class="modes" role="group" aria-label="Enrollment mode">
+    <button type="button" id="mode-simulated" aria-pressed="true">Simulated</button>
+    <button type="button" id="mode-live" aria-pressed="false">Live</button>
+  </div>
+
+  <span class="pill" id="pill-api" title="Payrit deployment this harness talks to">
+    <span class="dot" id="dot-api"></span> <span id="api-label">checking…</span>
+  </span>
+  <span class="pill" id="pill-key">key <b id="key-label">none</b></span>
+  <button type="button" class="ghost" id="reset">Reset session</button>
+</header>
+
+<div class="wrap">
+
+  <div class="col">
+    <div class="stage">
+      <div class="phone">
+        <div class="screen" id="screen">
+          <div class="statusbar">
+            <span id="clock">—</span>
+            <span class="bars">▂▄▆ ▮</span>
+          </div>
+          <div class="appbar">
+            <div class="applogo" id="app-initial">K</div>
+            <div>
+              <div class="appname" id="app-name">Kanto Microfinance</div>
+              <div class="appsub">powered by Payrit</div>
+            </div>
+          </div>
+          <div class="content" id="content"></div>
+        </div>
+      </div>
+    </div>
+    <p class="hint" id="stage-hint"></p>
+  </div>
+
+  <div class="col">
+
+    <section class="card">
+      <header>
+        <h2>Institution setup</h2>
+        <span class="spacer"></span>
+        <span class="pill" id="setup-state">not started</span>
+      </header>
+      <div class="steps" id="setup-steps"></div>
+      <form class="setupform" id="bootstrap-form">
+        <input id="acct-name" placeholder="Institution name" value="Kanto Microfinance" required>
+        <input id="acct-email" type="email" placeholder="ops@kanto.test" value="ops@kanto.test">
+        <button type="submit" id="bootstrap-btn">Register &amp; mint key</button>
+      </form>
+    </section>
+
+    <section class="card">
+      <header>
+        <h2>On the wire</h2>
+        <span class="spacer"></span>
+        <span class="pill" id="event-count">0 calls</span>
+        <button type="button" class="ghost" id="toggle-raw" aria-pressed="false" title="Show untruncated request and response bodies">Full values</button>
+        <button type="button" class="ghost" id="clear-log">Clear</button>
+      </header>
+      <div class="log" id="log">
+        <div class="empty">Nothing yet. Register the institution, then walk the phone through sign-up and enrollment.</div>
+      </div>
+      <div class="legend">
+        <span><span class="tag live">live</span> real call to the Payrit deployment</span>
+        <span><span class="tag simulated">sim</span> done locally by the harness</span>
+      </div>
+    </section>
+
+  </div>
+</div>
+
+<script src="/app.js"></script>
+</body>
+</html>

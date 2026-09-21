@@ -1,0 +1,13 @@
+# Secrets and local state. Never commit these.
+.env
+.env.local
+*.key
+
+# The account, key, customer and device private keys this harness created.
+.runtime.json
+
+# The harness's own attestation root and credential issuer key.
+.harness-pki/
+
+node_modules/
+.DS_Store
