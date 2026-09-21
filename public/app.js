@@ -7,7 +7,9 @@ var app = {
   busy: null,
   lastSeq: 0,
   eventCount: 0,
-  raw: false
+  raw: false,
+  pollTimer: null,
+  pollDelay: 1200
 };
 
 var $ = function (id) { return document.getElementById(id); };
@@ -35,6 +37,10 @@ function api(path, options) {
     headers: opts.body ? { "content-type": "application/json" } : undefined,
     body: opts.body ? JSON.stringify(opts.body) : undefined
   }).then(function (res) {
+    if (opts.method === "POST") {
+      app.pollDelay = POLL_MIN_MS;
+      schedulePoll(150);
+    }
     return res.json().then(function (json) {
       return { status: res.status, ok: res.ok, json: json };
     });
@@ -419,16 +425,24 @@ function renderSetup() {
   var customer = s && s.customer;
   var device = activeDevice();
 
+  var configuredKey = key && key.source === "env";
+
   var rows = [
     {
       title: "Register a business account",
       route: "POST /v1/accounts",
-      value: account ? account.name + " · " + short(account._id, 8, 4) : null
+      value: account
+        ? account.name + " · " + short(account._id, 8, 4)
+        : configuredKey
+        ? "not needed — a key is configured"
+        : null
     },
     {
-      title: "Mint the bootstrap API key",
-      route: "POST /v1/accounts/{id}/api-keys",
-      value: key ? key.prefix + " · " + (key.environment || "—") + " · " + (key.scopes ? key.scopes.length + " scopes" : "") : null
+      title: configuredKey ? "API key from configuration" : "Mint the bootstrap API key",
+      route: configuredKey ? "PAYRIT_API_KEY" : "POST /v1/accounts/{id}/api-keys",
+      value: key
+        ? key.prefix + (key.environment ? " · " + key.environment : "") + (key.scopes ? " · " + key.scopes.length + " scopes" : "")
+        : null
     },
     {
       title: "Create a customer",
@@ -466,7 +480,7 @@ function renderSetup() {
   label.textContent = done === 0 ? "not started" : done + " of 4 done";
   label.className = "pill" + (done === 4 ? " ok" : "");
 
-  $("bootstrap-form").style.display = account && key ? "none" : "flex";
+  $("bootstrap-form").style.display = key ? "none" : "flex";
   $("bootstrap-btn").disabled = app.busy === "bootstrap";
   $("bootstrap-btn").textContent = app.busy === "bootstrap" ? "Registering…" : "Register & mint key";
 
@@ -535,11 +549,27 @@ function reloadEvents() {
   });
 }
 
+var POLL_MIN_MS = 1200;
+var POLL_MAX_MS = 6000;
+
+function schedulePoll(delay) {
+  clearTimeout(app.pollTimer);
+  app.pollTimer = setTimeout(pollEvents, delay);
+}
+
 function pollEvents() {
+  if (document.hidden) return schedulePoll(POLL_MAX_MS);
+
   api("/api/events?since=" + app.lastSeq + (app.raw ? "&raw=1" : ""))
     .then(function (r) {
       var rows = r.json.events || [];
-      if (!rows.length) return;
+      if (!rows.length) {
+        app.pollDelay = Math.min(POLL_MAX_MS, Math.round(app.pollDelay * 1.5));
+        return schedulePoll(app.pollDelay);
+      }
+      app.pollDelay = POLL_MIN_MS;
+      schedulePoll(app.pollDelay);
+
       var log = $("log");
       var empty = log.querySelector(".empty");
       if (empty) empty.remove();
@@ -551,6 +581,8 @@ function pollEvents() {
       $("event-count").textContent = app.eventCount + (app.eventCount === 1 ? " call" : " calls");
     })
     .catch(function () {
+      app.pollDelay = POLL_MAX_MS;
+      schedulePoll(app.pollDelay);
     });
 }
 
@@ -625,5 +657,11 @@ $("clear-log").addEventListener("click", function () {
 });
 
 refreshState().then(checkHealth);
-setInterval(pollEvents, 1100);
+schedulePoll(POLL_MIN_MS);
+document.addEventListener("visibilitychange", function () {
+  if (!document.hidden) {
+    app.pollDelay = POLL_MIN_MS;
+    schedulePoll(200);
+  }
+});
 setInterval(tick, 1000);

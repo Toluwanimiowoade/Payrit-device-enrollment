@@ -130,7 +130,14 @@ Two things change when it is hosted:
 Environment variables to set on the host: `PAYRIT_API_KEY`, and for live enrollment the test
 roots — `PAYRIT_APPATTEST_ROOT_CERT` / `_JWK`, `PAYRIT_TEAM_ID`, `PAYRIT_BUNDLE_ID`,
 `PAYRIT_ANDROID_ROOT_CERT` / `_JWK`, `ANDROID_APP_PACKAGE`, `ANDROID_SIGNING_CERT_DIGEST`.
-All of those accept the value inline, so no files need to be deployed.
+All of those accept the value inline, so no files need to be deployed. A certificate may be
+given with real newlines or with them escaped as `\n`, which is what a single-line environment
+variable usually ends up holding.
+
+The wire log polls `/api/events`, backing off from 1.2s to 6s while nothing is happening and
+pausing when the tab is hidden, so an idle page does not bill a function invocation a second.
+Its contents are per-instance: with more than one warm instance the log will look incomplete,
+because each holds only the calls it served.
 
 ## Layout
 
