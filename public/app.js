@@ -7,6 +7,9 @@ var app = {
   busy: null,
   lastSeq: 0,
   eventCount: 0,
+  screen: null,
+  selectedDeviceId: null,
+  handshake: null,
   raw: false,
   pollTimer: null,
   pollDelay: 1200
@@ -54,19 +57,55 @@ function refreshState() {
   });
 }
 
+function devices() {
+  return (app.state && app.state.devices) || [];
+}
+
+function liveDevices() {
+  return devices().filter(function (d) {
+    return !d.revokedAt;
+  });
+}
+
 function activeDevice() {
-  if (!app.state || !app.state.devices.length) return null;
-  return app.state.devices[app.state.devices.length - 1];
+  var list = devices();
+  if (!list.length) return null;
+  var picked = null;
+  list.forEach(function (d) {
+    if (d.deviceId === app.selectedDeviceId) picked = d;
+  });
+  return picked || list[list.length - 1];
 }
 
 function currentScreen() {
   var s = app.state;
   if (!s || !s.key.present) return "waiting";
   if (!s.customer) return "signup";
-  var device = activeDevice();
-  if (!device) return "secure";
-  if (device.revokedAt) return "revoked";
-  return "wallet";
+  if (!devices().length) return "secure";
+  if (app.screen === "enroll") return "secure";
+  if (app.screen === "pay") return "pay";
+  if (app.screen === "device") return "device";
+  return "devices";
+}
+
+function goTo(screen, deviceId) {
+  app.screen = screen;
+  if (deviceId) app.selectedDeviceId = deviceId;
+  app.banner = null;
+  try {
+    location.hash = screen === "devices" ? "" : screen + (deviceId ? "/" + deviceId : "");
+  } catch (e) {
+  }
+  render();
+}
+
+function readHash() {
+  var raw = String(location.hash || "").replace(/^#/, "");
+  if (!raw) return;
+  var parts = raw.split("/");
+  if (["device", "pay", "enroll"].indexOf(parts[0]) === -1) return;
+  app.screen = parts[0];
+  if (parts[1]) app.selectedDeviceId = parts[1];
 }
 
 function setBusy(name) {
@@ -187,6 +226,70 @@ function lifecycle(action, deviceId) {
     });
 }
 
+function requestPreauth(deviceId, cap, currency) {
+  app.banner = null;
+  setBusy("preauth");
+  api("/api/preauth", { method: "POST", body: { mode: app.mode, deviceId: deviceId, cap: cap, currency: currency } })
+    .then(function (r) {
+      app.busy = null;
+      if (r.json.state) app.state = r.json.state;
+      if (!r.ok || r.json.ok === false) {
+        fail(r.json.message || "Could not reserve the cap", r.json.explanation, r.json.status);
+      } else {
+        inform("good", "Spend cap reserved and signed.");
+      }
+      render();
+    })
+    .catch(function (err) {
+      app.busy = null;
+      fail(err.message);
+      render();
+    });
+}
+
+function revokePreauth(deviceId) {
+  app.banner = null;
+  setBusy("preauth-revoke");
+  api("/api/preauth/revoke", { method: "POST", body: { deviceId: deviceId } })
+    .then(function (r) {
+      app.busy = null;
+      if (r.json.state) app.state = r.json.state;
+      if (!r.ok || r.json.ok === false) fail(r.json.message || "Could not release the hold", null, r.json.status);
+      else inform("info", "Hold released. The unconsumed amount goes back to the wallet.");
+      render();
+    })
+    .catch(function (err) {
+      app.busy = null;
+      fail(err.message);
+      render();
+    });
+}
+
+function runHandshake(payerDeviceId, payeeDeviceId, amount) {
+  app.banner = null;
+  app.handshake = null;
+  setBusy("handshake");
+  api("/api/handshake", {
+    method: "POST",
+    body: { payerDeviceId: payerDeviceId, payeeDeviceId: payeeDeviceId, amount: amount }
+  })
+    .then(function (r) {
+      app.busy = null;
+      if (r.json.state) app.state = r.json.state;
+      if (!r.ok) {
+        fail(r.json.message || "The handshake could not run", null, r.status);
+      } else {
+        app.handshake = r.json;
+      }
+      render();
+    })
+    .catch(function (err) {
+      app.busy = null;
+      fail(err.message);
+      render();
+    });
+}
+
 function resetSession() {
   app.banner = null;
   api("/api/reset", { method: "POST" }).then(function (r) {
@@ -252,41 +355,173 @@ function renderPhone() {
     ].join("");
   }
 
-  if (screen === "wallet" || screen === "revoked") {
-    var device = activeDevice();
-    html += credentialCard(device);
+  if (screen === "devices") {
+    var list = devices();
     html += [
+      "<h3>Your devices</h3>",
+      '<p class="lead">' + list.length + (list.length === 1 ? " device is" : " devices are") +
+        " enrolled to this customer. Each holds its own hardware key and its own spend cap.</p>",
+      '<div class="devlist">',
+      list
+        .map(function (d) {
+          return deviceRow(d);
+        })
+        .join(""),
+      "</div>",
+      '<div class="ctas">',
+      '<button type="button" class="cta accent" id="do-add">Add another device</button>',
+      liveDevices().length >= 2
+        ? '<button type="button" class="cta secondary" id="do-pay">Pay another device</button>'
+        : "",
+      "</div>"
+    ].join("");
+  }
+
+  if (screen === "device") {
+    var device = activeDevice();
+    html += [
+      '<button type="button" class="backlink" id="do-back">‹ All devices</button>',
+      credentialCard(device),
       '<div class="meta">',
       kv("Device", short(device.deviceId, 8, 4)),
       kv("Instrument", device.paymentInstrumentId ? short(device.paymentInstrumentId, 8, 4) : "—"),
       kv("Platform", device.platform),
       kv("Key fingerprint", short(device.fingerprint, 10, 6)),
-      "</div>"
+      "</div>",
+      preauthPanel(device)
     ].join("");
 
-    if (screen === "wallet") {
+    if (!device.revokedAt) {
       html += [
         '<div class="ctas">',
         '<button type="button" class="cta secondary" id="do-refresh"' + (app.busy === "refresh" ? " disabled" : "") + ">" +
-          (app.busy === "refresh" ? "Refreshing…" : "Refresh credential") +
-          "</button>",
+          (app.busy === "refresh" ? "Refreshing…" : "Refresh credential") + "</button>",
         '<button type="button" class="cta danger" id="do-revoke"' + (app.busy === "revoke" ? " disabled" : "") + ">" +
-          (app.busy === "revoke" ? "Revoking…" : "Report this device lost") +
-          "</button>",
+          (app.busy === "revoke" ? "Revoking…" : "Report this device lost") + "</button>",
         "</div>"
       ].join("");
     } else {
-      html += [
-        '<div class="ctas">',
-        '<button type="button" class="cta accent" id="do-reenroll">Set up a new device</button>',
-        "</div>"
-      ].join("");
+      html += '<div class="ctas"><button type="button" class="cta accent" id="do-add">Set up a new device</button></div>';
     }
+  }
+
+  if (screen === "pay") {
+    var payer = activeDevice();
+    var others = liveDevices().filter(function (d) {
+      return d.deviceId !== payer.deviceId;
+    });
+    html += [
+      '<button type="button" class="backlink" id="do-back">‹ All devices</button>',
+      "<h3>Tap to pay</h3>",
+      '<p class="lead">Both phones are offline. They exchange signed messages over Bluetooth and verify each other with no network at all.</p>',
+      '<div class="field"><label for="f-payee">Pay which device</label><select id="f-payee">' +
+        others
+          .map(function (d) {
+            return '<option value="' + esc(d.deviceId) + '">' + esc(d.platform) + " · " + esc(short(d.deviceId, 8, 4)) + "</option>";
+          })
+          .join("") +
+        "</select></div>",
+      '<div class="field"><label for="f-amount">Amount (minor units)</label><input id="f-amount" type="number" min="1" value="2500"></div>',
+      payer.authorization
+        ? '<p class="hintline">' + payer.authorization.remaining + " of " + payer.authorization.cap + " " +
+          esc(payer.authorization.currency) + " left on this device\'s cap</p>"
+        : '<p class="hintline">This device needs a pre-authorization before it can pay.</p>',
+      app.handshake ? handshakeReport(app.handshake) : "",
+      '<button type="button" class="cta accent" id="do-handshake"' + (app.busy === "handshake" ? " disabled" : "") + ">" +
+        (app.busy === "handshake" ? "Handshaking…" : "Start the handshake") + "</button>"
+    ].join("");
   }
 
   content.innerHTML = html;
   wirePhone(screen);
   updateHint(screen);
+}
+
+function phoneSvg() {
+  return [
+    '<svg viewBox="0 0 24 24" aria-hidden="true" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8">',
+    '<rect x="6" y="2" width="12" height="20" rx="2.5"/>',
+    '<path d="M10.5 18.5h3"/>',
+    "</svg>"
+  ].join("");
+}
+
+function deviceRow(d) {
+  var auth = d.authorization;
+  var status = d.revokedAt
+    ? '<span class="pillsm bad">revoked</span>'
+    : '<span class="pillsm ok">active</span>';
+  var cap = auth
+    ? '<span class="pillsm">' + auth.remaining + "/" + auth.cap + " " + esc(auth.currency) + "</span>"
+    : '<span class="pillsm muted">no cap</span>';
+  return [
+    '<button type="button" class="devrow" data-device="' + esc(d.deviceId) + '">',
+    '<span class="devicon">' + phoneSvg() + "</span>",
+    '<span class="devmain">',
+    "<b>" + esc(d.platform === "ios" ? "iPhone" : "Android") + "</b>",
+    "<small>" + esc(short(d.deviceId, 8, 4)) + " · " + esc(d.origin) + "</small>",
+    "</span>",
+    '<span class="devtags">' + status + cap + "</span>",
+    "</button>"
+  ].join("");
+}
+
+function preauthPanel(device) {
+  var auth = device.authorization;
+  if (device.revokedAt) return "";
+
+  if (!auth || auth.status !== "active") {
+    return [
+      '<div class="panel">',
+      '<div class="panelhead">Spend cap</div>',
+      '<p class="hintline">A device needs a signed cap reserved against the wallet before it can transact offline.</p>',
+      '<div class="row2">',
+      '<div class="field"><label for="f-cap">Cap (minor units)</label><input id="f-cap" type="number" min="1" value="10000"></div>',
+      select("currency", "Currency", [["NGN", "NGN"], ["USDC", "USDC"], ["USDT", "USDT"], ["KES", "KES"], ["GHS", "GHS"]]),
+      "</div>",
+      '<button type="button" class="cta secondary" id="do-preauth"' + (app.busy === "preauth" ? " disabled" : "") + ">" +
+        (app.busy === "preauth" ? "Reserving…" : "Reserve a spend cap") + "</button>",
+      "</div>"
+    ].join("");
+  }
+
+  var pct = auth.cap ? Math.round((auth.spent / auth.cap) * 100) : 0;
+  return [
+    '<div class="panel">',
+    '<div class="panelhead">Spend cap <span class="pillsm' + (auth.origin === "live" ? " ok" : "") + '">' + esc(auth.origin) + "</span></div>",
+    '<div class="capbar"><span style="width:' + pct + '%"></span></div>',
+    '<div class="capnums"><b>' + auth.remaining + "</b> of " + auth.cap + " " + esc(auth.currency) + " left</div>",
+    '<div class="meta">',
+    kv("Authorization", short(auth.authorizationId, 8, 4)),
+    kv("Transactions", String(device.chainLength || 0)),
+    "</div>",
+    '<button type="button" class="cta danger" id="do-preauth-revoke"' + (app.busy === "preauth-revoke" ? " disabled" : "") + ">" +
+      (app.busy === "preauth-revoke" ? "Releasing…" : "Release the hold") + "</button>",
+    "</div>"
+  ].join("");
+}
+
+function handshakeReport(result) {
+  var rows = result.steps
+    .map(function (s) {
+      return [
+        '<li class="' + (s.ok ? "ok" : "bad") + '">',
+        '<span class="mark">' + (s.ok ? "✓" : "✕") + "</span>",
+        "<span><b>" + esc(s.step) + "</b>",
+        s.real ? "" : ' <span class="pillsm muted">not verifiable here</span>',
+        "<small>" + esc(s.detail) + "</small></span>",
+        "</li>"
+      ].join("");
+    })
+    .join("");
+
+  var head = result.ok
+    ? '<div class="banner good"><b>Payment accepted offline.</b><span>' +
+      result.summary.amount + " " + esc(result.summary.currency) + " · sequence " +
+      result.summary.sequenceNumber + " · " + result.summary.remainingAfter + " left on the cap</span></div>"
+    : '<div class="banner err"><b>Handshake refused.</b><span>' + esc(result.reason || "") + "</span></div>";
+
+  return head + '<ol class="steps-list">' + rows + "</ol>";
 }
 
 function bannerHtml(banner) {
@@ -383,26 +618,66 @@ function wirePhone(screen) {
       });
     });
   }
+
   if (screen === "secure") {
-    var platform = $("f-platform");
     $("do-enroll").addEventListener("click", function () {
-      enroll(platform.value, $("f-currency").value);
+      app.screen = null;
+      enroll($("f-platform").value, $("f-currency").value);
     });
   }
-  if (screen === "wallet") {
+
+  if (screen === "devices") {
+    Array.prototype.forEach.call(document.querySelectorAll(".devrow"), function (row) {
+      row.addEventListener("click", function () {
+        goTo("device", row.getAttribute("data-device"));
+      });
+    });
+    $("do-add").addEventListener("click", function () {
+      goTo("enroll");
+    });
+    var pay = $("do-pay");
+    if (pay) {
+      pay.addEventListener("click", function () {
+        app.handshake = null;
+        goTo("pay");
+      });
+    }
+  }
+
+  if (screen === "device") {
     var device = activeDevice();
-    $("do-refresh").addEventListener("click", function () {
-      lifecycle("refresh", device.deviceId);
-    });
-    $("do-revoke").addEventListener("click", function () {
-      lifecycle("revoke", device.deviceId);
-    });
+    var back = $("do-back");
+    if (back) back.addEventListener("click", function () { goTo("devices"); });
+
+    var refresh = $("do-refresh");
+    if (refresh) refresh.addEventListener("click", function () { lifecycle("refresh", device.deviceId); });
+
+    var revoke = $("do-revoke");
+    if (revoke) revoke.addEventListener("click", function () { lifecycle("revoke", device.deviceId); });
+
+    var add = $("do-add");
+    if (add) add.addEventListener("click", function () { goTo("enroll"); });
+
+    var pre = $("do-preauth");
+    if (pre) {
+      pre.addEventListener("click", function () {
+        requestPreauth(device.deviceId, $("f-cap").value, $("f-currency").value);
+      });
+    }
+    var preRevoke = $("do-preauth-revoke");
+    if (preRevoke) {
+      preRevoke.addEventListener("click", function () { revokePreauth(device.deviceId); });
+    }
   }
-  if (screen === "revoked") {
-    $("do-reenroll").addEventListener("click", function () {
-      app.state.devices = [];
-      app.banner = null;
-      render();
+
+  if (screen === "pay") {
+    var payer = activeDevice();
+    $("do-back").addEventListener("click", function () {
+      app.handshake = null;
+      goTo("devices");
+    });
+    $("do-handshake").addEventListener("click", function () {
+      runHandshake(payer.deviceId, $("f-payee").value, Number($("f-amount").value));
     });
   }
 }
@@ -412,8 +687,9 @@ function updateHint(screen) {
     waiting: "The phone is idle until the institution has an API key — every enrollment call is authenticated as the institution, never as the customer.",
     signup: "POST /v1/customers. Devices enroll against a customer, so this record has to exist first.",
     secure: "One tap runs POST /v1/enroll/challenge, generates the key, builds the attestation, then POST /v1/enroll.",
-    wallet: "Refresh proves possession over a fresh nonce instead of re-attesting. Revoke is the kill switch.",
-    revoked: "A revoked device cannot refresh. Try the refresh button on a revoked device and the harness shows you the rejection."
+    devices: "One customer, many devices. Each has its own hardware key, its own credential and its own spend cap.",
+    device: "Refresh proves possession over a fresh nonce. The cap is POST /v1/authorizations, reserved against the wallet.",
+    pay: "No network here. Payrit's role ended when the cap was issued — the two devices verify each other with signatures alone."
   };
   $("stage-hint").textContent = hints[screen] || "";
 }
@@ -656,6 +932,7 @@ $("clear-log").addEventListener("click", function () {
   $("event-count").textContent = "0 calls";
 });
 
+readHash();
 refreshState().then(checkHealth);
 schedulePoll(POLL_MIN_MS);
 document.addEventListener("visibilitychange", function () {

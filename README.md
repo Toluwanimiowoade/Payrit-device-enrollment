@@ -86,6 +86,34 @@ DER — the same bytes the request's `publicKey` field base64-encodes.
 
 Both are settable via `PAYRIT_ANDROID_BINDING` and `PAYRIT_ANDROID_APPID_LOCATION`.
 
+## Many devices, one customer
+
+A customer can enroll as many devices as you like — the phone lists them, each with its own hardware key,
+its own credential and its own spend cap. Pick one to refresh it, revoke it, or reserve a cap against it.
+
+## The offline handshake
+
+With two live devices and a cap on the payer, **Pay another device** runs the handshake the docs specify.
+There is no endpoint for it and the docs say there never will be: Payrit is unreachable mid-handshake, so
+everything happens between the two devices.
+
+What the harness verifies for real:
+
+* both devices prove possession of their hardware keys by signing a fresh 32-byte nonce;
+* the payer's transaction chain is replayed record by record — every payer signature, every
+  `previous_record_hash` link back to the PreAuthorization, and the running total;
+* the new amount is checked against what the replay says is left, not against a stored counter;
+* the record is signed by the payer and countersigned by the payee over the record *plus* that signature.
+
+What it cannot verify: the Payrit signature on a **live** credential or authorization. The CA public key is
+embedded in the real SDK and is not published, so those steps are marked "not verifiable here" rather than
+being quietly passed. In simulated mode the harness issued them, so it checks them properly.
+
+Spending past the cap is refused, and the chain is tamper-evident against reordering, deletion, amount
+rewriting and foreign signatures. It is *not* evidence against truncation — see
+[INTEGRATION.md](INTEGRATION.md) §5c, which is a property of the protocol rather than of this
+implementation.
+
 ## Response shape
 
 The 201 carries no `deviceId`:
@@ -160,6 +188,9 @@ because each holds only the calls it served.
 | `lib/paths.js` | Where writable state lives; redirects to tmp when serverless. |
 | `api/index.js`, `vercel.json` | Serverless entry point and routing. |
 | `lib/credential.js` | Reads the Device Credential the deployment returns. |
+| `lib/preauth.js` | Issues and verifies pre-authorizations in simulated mode. |
+| `lib/ble.js` | The offline handshake: possession proofs, the signed transaction chain, cap replay. |
+| `lib/protobuf.js` | Minimal protobuf writer and reader for the record formats. |
 
 ## Endpoints
 
@@ -172,6 +203,9 @@ The harness's own routes, all called by the page:
 | `POST /api/enroll` | `POST /v1/enroll/challenge`, generates the key and attestation, then `POST /v1/enroll`. |
 | `POST /api/refresh` | Fresh nonce, signs it with the device key, then `POST /v1/enroll/refresh`. |
 | `POST /api/revoke` | `POST /v1/devices/{id}/revoke`. |
+| `POST /api/preauth` | `POST /v1/authorizations` — reserves a spend cap. |
+| `POST /api/preauth/revoke` | `POST /v1/authorizations/{id}/revoke`. |
+| `POST /api/handshake` | Runs the offline handshake between two enrolled devices. No network involved. |
 | `GET /api/state` | Account, key prefix, customer, devices. Never a raw secret. |
 | `GET /api/events` | Everything on the wire so far. |
 | `POST /api/reset` | Drops `.runtime.json` and the log. The Payrit-side records stay. |

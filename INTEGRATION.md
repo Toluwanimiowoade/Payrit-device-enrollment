@@ -159,6 +159,65 @@ DER-wrapped signature.
 
 ---
 
+## 5b. Pre-authorization, and what blocks it
+
+`POST /v1/authorizations` reserves a spend cap against the account's wallet. Two things will stop you
+before the request shape ever matters:
+
+**Your key needs the new scopes.** `authorizations:read` / `authorizations:write` were added after the
+first release. A bootstrap key minted before they existed does not have them and gets `403 API key is
+missing a required scope`. Mint a new key — an existing key with `api_keys:write` can request the full
+scope list — or register a fresh account, whose bootstrap key now carries all eight.
+
+**The account needs a funded ledger.** Two distinct failures, in order:
+
+| Message | Meaning |
+| --- | --- |
+| `422 No NGN ledger accounts are provisioned for this account` | The account has no ledger for that currency at all. Accounts registered before ledgers existed have none. |
+| `422 Insufficient available balance to reserve this amount` | The ledger exists but holds nothing. Fails even for `cap: "1"`. |
+
+There is **no endpoint in the API to provision or fund a ledger**, and the docs do not mention one. As of
+this writing a freshly registered account gets NGN ledgers automatically but they are empty, so live
+pre-authorization cannot succeed from a client at all — the balance has to come from the Payrit side.
+
+Also worth knowing: `deviceId` in `RequestPreAuthorizationDto` is the **`paymentInstrumentId`** again, the
+same aliasing as refresh and revoke (§4). A device may hold only one active authorization; asking for a
+second returns `409`.
+
+---
+
+## 5c. The offline handshake: what the chain does and does not prove
+
+The handshake is specified in the docs and has no API. Implementing it surfaced one property worth being
+deliberate about.
+
+The `previous_record_hash` chain anchors at the **PreAuthorization**, at the start. Each record points
+backwards to the one before it. That makes the chain tamper-evident in every direction but one:
+
+| Tampering | Detected? |
+| --- | --- |
+| Reorder two records | Yes — sequence numbers and hashes break |
+| Remove a record from the middle | Yes — the next record's hash no longer matches |
+| Rewrite an amount | Yes — the payer signature no longer verifies |
+| Append a record signed by another key | Yes — signature fails |
+| **Truncate the chain, dropping the most recent records** | **No** |
+
+A prefix of an honest chain is itself a perfectly valid chain: every hash still links, every signature
+still verifies, and `running_consumed` is consistent with what remains. A payer presenting only the first
+two of its four records looks like a device that has spent less and has more headroom.
+
+Nothing in the presented data can prove a chain is *complete*, because completeness is a claim about
+records the receiver has never seen. This is inherent to offline verification rather than a flaw in the
+encoding, and it is the reason `receiverSignature` matters: every receiver holds countersigned proof of
+the transaction it took part in, so an overspend is reconstructible at settlement even though it cannot be
+prevented at handshake time.
+
+If that is the intended model, say so in the docs — an implementer reading "the receiver replays that
+chain, confirms every signature and every link" will reasonably assume the cap is enforced offline, when
+what is actually enforced offline is "no *disclosed* spending exceeds the cap."
+
+---
+
 ## 6. Reading the error messages
 
 Each rejection is specific, and the message tells you how far you got. Working through them in
@@ -178,6 +237,9 @@ this order saves time:
 | `422 Attestation application id does not match the configured app` | Package or digest mismatch, or the app id is in `softwareEnforced`. |
 | `404 Device not found` on refresh/revoke | You passed the device id instead of the payment instrument id. |
 | `403 Device is not active` | Already revoked. Correct behaviour. |
+| `403 API key is missing a required scope` | On `/v1/authorizations`: the key predates the `authorizations:*` scopes. |
+| `422 No NGN ledger accounts are provisioned` | The account has no ledger for that currency. Server-side to fix. |
+| `422 Insufficient available balance` | The ledger exists but is empty. No funding endpoint exists. |
 
 The useful property here is that the messages are ordered by how deep you got. Moving from
 "chain does not terminate" to "challenge does not match" is progress, not a new problem.
@@ -218,7 +280,11 @@ Worth resolving before anyone builds a production client:
    published, so clients cannot verify the credential they are issued.
 5. **Is the `integrityToken` ever validated?** Currently required but unchecked. Clients need to
    know whether to invest in producing a real one.
-6. **Publish the custom binding in the API reference.** It is the one thing no integrator can
+6. **Is there a way to fund a test ledger?** Live pre-authorization is unreachable from a client
+   without one, so no integrator can exercise steps 6 onward against the real API.
+7. **Is chain truncation an accepted limitation?** See §5c. If the answer is "settlement catches it",
+   the docs should say so where they describe the replay.
+8. **Publish the custom binding in the API reference.** It is the one thing no integrator can
    guess, and none of it appears in the docs today.
 
 ---

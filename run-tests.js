@@ -72,7 +72,19 @@ function checkSpec() {
         })
       );
 
-      ok("EnrollDeviceDto no longer carries currency", text.indexOf("currency") === -1);
+      var enrollDto = text.slice(text.indexOf("EnrollDeviceDto:"), text.indexOf("RefreshCredentialDto:"));
+      ok("EnrollDeviceDto no longer carries currency", enrollDto.indexOf("currency") === -1);
+
+      ["/v1/authorizations", "/v1/authorizations/{id}", "/v1/authorizations/{id}/revoke"].forEach(function (path) {
+        ok("documents " + path, text.indexOf(path + ":") !== -1);
+      });
+      var authDto = text.slice(text.indexOf("RequestPreAuthorizationDto:"));
+      ok("a pre-authorization takes deviceId, cap and currency",
+        ["deviceId", "cap", "currency"].every(function (f) {
+          return authDto.indexOf(f) !== -1;
+        }));
+      ok("the cap is a decimal string in minor units", /minor currency units/.test(authDto));
+      ok("authorizations have their own scopes", text.indexOf("authorizations:write") !== -1);
       ok("refresh is proved with a raw ES256 (ieee-p1363) signature over the nonce", /ieee-p1363/.test(text));
       ok("device key is a P-256 SubjectPublicKeyInfo", /P-256 SubjectPublicKeyInfo/.test(text));
       ok(
@@ -304,6 +316,131 @@ function checkSimulator() {
   ok("revoking twice is refused", simulator.revoke({ device: device, deviceId: device.deviceId }).status === 409);
 }
 
+
+function checkOfflineHandshake() {
+  group("Pre-authorization and the offline handshake");
+
+  var pb = require("./lib/protobuf.js");
+  var preauth = require("./lib/preauth.js");
+  var ble = require("./lib/ble.js");
+
+  var enc = pb.encode({ 1: { type: "string", value: "abc" }, 2: { type: "uint", value: 300 } });
+  var dec = pb.decode(enc);
+  ok("protobuf round-trips strings and varints", dec[1].toString("utf8") === "abc" && dec[2] === 300);
+  ok("varint matches the wire format", pb.varint(300).toString("hex") === "ac02");
+
+  var payerKey = hardware.createDeviceKey();
+  var payeeKey = hardware.createDeviceKey();
+
+  var issued = preauth.issue({
+    deviceId: "device-a",
+    customerId: "customer-1",
+    accountId: "account-1",
+    cap: "10000",
+    currency: "NGN"
+  });
+  ok("a pre-authorization is issued with a signature", !!issued.preAuthorization && !!issued.signature);
+  ok(
+    "its signature verifies",
+    preauth.verifySignature(Buffer.from(issued.preAuthorization, "base64"), issued.signature)
+  );
+  var parsedAuth = preauth.parse(issued.preAuthorization);
+  ok("it decodes back to the cap it was issued for", parsedAuth.cap === 10000 && parsedAuth.currency === "NGN");
+  ok(
+    "a tampered pre-authorization is rejected",
+    !preauth.verifySignature(Buffer.from("not the same bytes", "utf8"), issued.signature)
+  );
+
+  var payer = {
+    deviceId: "device-a",
+    apiDeviceId: "device-a",
+    customerId: "customer-1",
+    platform: "ios",
+    origin: "simulated",
+    publicKey: payerKey.spkiB64,
+    privatePem: payerKey.privatePem,
+    credential: JSON.stringify({ credential: issued.preAuthorization, signature: issued.signature }),
+    credentialExpiresAt: new Date(Date.now() + 3600000).toISOString(),
+    revokedAt: null,
+    authorization: Object.assign({ status: "active", origin: "simulated" }, issued),
+    chain: []
+  };
+  var payee = {
+    deviceId: "device-b",
+    apiDeviceId: "device-b",
+    customerId: "customer-1",
+    platform: "android",
+    origin: "simulated",
+    publicKey: payeeKey.spkiB64,
+    privatePem: payeeKey.privatePem,
+    credential: JSON.stringify({ credential: issued.preAuthorization, signature: issued.signature }),
+    credentialExpiresAt: new Date(Date.now() + 3600000).toISOString(),
+    revokedAt: null
+  };
+
+  var chain = [];
+  var first = ble.handshake({ payer: payer, payee: payee, amount: 2500, chain: chain, accountId: "account-1" });
+  ok("a handshake inside the cap succeeds", first.ok, first.reason || "");
+  ok("it reports the remaining headroom", first.summary && first.summary.remainingAfter === 7500);
+  chain.push(first.entry);
+  payer.chain = chain;
+
+  var second = ble.handshake({ payer: payer, payee: payee, amount: 3000, chain: chain, accountId: "account-1" });
+  ok("a second handshake chains onto the first", second.ok && second.summary.sequenceNumber === 2);
+  ok("consumption accumulates across the chain", second.summary.consumedAfter === 5500);
+  chain.push(second.entry);
+  payer.chain = chain;
+
+  var over = ble.handshake({ payer: payer, payee: payee, amount: 99999, chain: chain, accountId: "account-1" });
+  ok("spending past the cap is refused", !over.ok);
+  ok("and says why", /remains of the/.test(over.reason || ""));
+
+  var replay = ble.replayChain(payer, chain);
+  ok("an untouched chain replays cleanly", replay.problems.length === 0);
+  ok("the replayed total matches the records", replay.consumed === 5500);
+
+  var reordered = [chain[1], chain[0]];
+  ok("a reordered chain is rejected", ble.replayChain(payer, reordered).problems.length > 0);
+
+  var edited = chain.map(function (e) {
+    return { record: e.record, payerSignature: e.payerSignature };
+  });
+  var decoded = ble.decodeRecord(edited[1].record);
+  var forged = ble.buildTransaction({
+    transactionId: decoded.transaction.transactionId,
+    senderInstitutionId: "account-1",
+    senderUserRef: "customer-1",
+    receiverInstitutionId: "account-1",
+    receiverUserRef: "customer-1",
+    amount: 1,
+    currency: "NGN",
+    timestamp: decoded.transaction.timestamp,
+    preauthId: decoded.transaction.preauthId,
+    senderDeviceId: "device-a",
+    receiverDeviceId: "device-b"
+  });
+  edited[1].record = ble
+    .buildRecord(forged, decoded.sequenceNumber, decoded.previousRecordHash, 1)
+    .toString("base64");
+  ok("rewriting an amount breaks the payer signature", ble.replayChain(payer, edited).problems.length > 0);
+
+  var strangerKey = hardware.createDeviceKey();
+  var stranger = Object.assign({}, payer, { publicKey: strangerKey.spkiB64 });
+  ok("a chain replayed against the wrong key is rejected", ble.replayChain(stranger, chain).problems.length > 0);
+
+  var revokedPayer = Object.assign({}, payer, { revokedAt: new Date().toISOString() });
+  ok(
+    "a revoked device cannot complete a handshake",
+    !ble.handshake({ payer: revokedPayer, payee: payee, amount: 10, chain: chain, accountId: "account-1" }).ok
+  );
+
+  var noAuth = Object.assign({}, payer, { authorization: null });
+  ok(
+    "a device with no pre-authorization cannot pay",
+    !ble.handshake({ payer: noAuth, payee: payee, amount: 10, chain: [], accountId: "account-1" }).ok
+  );
+}
+
 function checkLiveReachable() {
   group("Live deployment (" + state.apiBase() + ")");
   return payrit.hello().then(
@@ -386,6 +523,7 @@ checkSpec()
   .then(function () {
     checkHardware();
     checkSimulator();
+    checkOfflineHandshake();
     return checkLiveReachable();
   })
   .then(checkAuthRefusals)
