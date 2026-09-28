@@ -159,30 +159,66 @@ DER-wrapped signature.
 
 ---
 
-## 5b. Pre-authorization, and what blocks it
+## 5b. Pre-authorization needs a funded wallet
 
-`POST /v1/authorizations` reserves a spend cap against the account's wallet. Two things will stop you
-before the request shape ever matters:
+`POST /v1/authorizations` reserves a spend cap. Two prerequisites:
 
-**Your key needs the new scopes.** `authorizations:read` / `authorizations:write` were added after the
-first release. A bootstrap key minted before they existed does not have them and gets `403 API key is
-missing a required scope`. Mint a new key — an existing key with `api_keys:write` can request the full
-scope list — or register a fresh account, whose bootstrap key now carries all eight.
+**Scopes.** The scope list has grown twice — `authorizations:*`, then `wallet:*`, `payments:write` and
+`transactions:read`. A key minted before a scope existed does not have it and gets `403 API key is missing
+a required scope`. **Mint keys without a `scopes` field**: the DTO says it "defaults to every scope when
+omitted", so an omitted list keeps working as the API grows. Naming scopes explicitly is what leaves you
+stranded later.
 
-**The account needs a funded ledger.** Two distinct failures, in order:
+**A funded wallet.** `POST /v1/wallet/fund` credits a currency; `GET /v1/wallet/balances` shows one row
+per currency and account type. Without a balance, pre-authorization fails with `422 Insufficient available
+balance to reserve this amount` — even for `cap: "1"`.
 
-| Message | Meaning |
-| --- | --- |
-| `422 No NGN ledger accounts are provisioned for this account` | The account has no ledger for that currency at all. Accounts registered before ledgers existed have none. |
-| `422 Insufficient available balance to reserve this amount` | The ledger exists but holds nothing. Fails even for `cap: "1"`. |
+Funding is idempotent on a caller-supplied `correlationId`: replaying the same id with the same amount and
+currency returns the original result, and replaying it with a *different* amount returns `409`. Verified
+both.
 
-There is **no endpoint in the API to provision or fund a ledger**, and the docs do not mention one. As of
-this writing a freshly registered account gets NGN ledgers automatically but they are empty, so live
-pre-authorization cannot succeed from a client at all — the balance has to come from the Payrit side.
+The money moves between two ledgers you can watch:
 
-Also worth knowing: `deviceId` in `RequestPreAuthorizationDto` is the **`paymentInstrumentId`** again, the
-same aliasing as refresh and revoke (§4). A device may hold only one active authorization; asking for a
-second returns `409`.
+| Step | wallet | withheld |
+| --- | --- | --- |
+| Fund 200000 | 200000 | 0 |
+| Pre-authorize 15000 | 185000 | 15000 |
+| Three offline payments, 9500 total | *unchanged* | *unchanged* |
+| Sync the records | 194500 | 5500 |
+
+Nothing moves while the devices are offline, which is the point: the hold is taken up front, and settlement
+only happens when the signed records arrive.
+
+`deviceId` in `RequestPreAuthorizationDto` is the **`paymentInstrumentId`**, the same aliasing as refresh
+and revoke (§4). A device may hold one active authorization; a second returns `409`.
+
+### The PreAuthorization wire format
+
+Worth writing down, because it is not in the docs and the harness had it wrong until a live response was
+decoded:
+
+```
+1 authorizationId   2 deviceId   3 customerId   4 cap (varint)
+5 currency          6 issuedAt (epoch ms)       7 expiresAt (epoch ms)
+```
+
+---
+
+## 5d. Reconnecting: POST /v1/payments/sync
+
+Upload the countersigned records collected offline, up to 100 per call, from either the payer or the payee
+institution. Each is re-verified server-side and posted to the ledger once its chain links back to the
+PreAuthorization. The response is one result per record, in order:
+
+```json
+{ "transactionId": "…", "status": "synced", "duplicate": false }
+```
+
+Re-uploading an identical record is safe and comes back with `duplicate: true`.
+
+Records produced entirely offline by an independent implementation are accepted — this harness builds the
+protobuf, the hash chain and both signatures itself, and the deployment verifies and posts them. If your
+records are rejected, the encoding is where to look first, not the transport.
 
 ---
 
@@ -238,8 +274,9 @@ this order saves time:
 | `404 Device not found` on refresh/revoke | You passed the device id instead of the payment instrument id. |
 | `403 Device is not active` | Already revoked. Correct behaviour. |
 | `403 API key is missing a required scope` | On `/v1/authorizations`: the key predates the `authorizations:*` scopes. |
-| `422 No NGN ledger accounts are provisioned` | The account has no ledger for that currency. Server-side to fix. |
-| `422 Insufficient available balance` | The ledger exists but is empty. No funding endpoint exists. |
+| `422 No NGN ledger accounts are provisioned` | The account predates ledgers. Register a fresh account. |
+| `422 Insufficient available balance` | Fund the wallet first with `POST /v1/wallet/fund`. |
+| `409 correlationId was already used for a different funding request` | Idempotency key reused with a different amount. |
 
 The useful property here is that the messages are ordered by how deep you got. Moving from
 "chain does not terminate" to "challenge does not match" is progress, not a new problem.
@@ -261,6 +298,9 @@ The useful property here is that the messages are ordered by how deep you got. M
 - [ ] Store the **`paymentInstrumentId`** — that is what refresh and revoke key on.
 - [ ] Refresh before `expiresAt`; credentials last 24 hours.
 - [ ] Handle revocation: a revoked device cannot refresh, and must re-enroll.
+- [ ] Fund the wallet before requesting a cap, and use a stable `correlationId` per funding intent.
+- [ ] Queue countersigned records on-device while offline; upload with `POST /v1/payments/sync` on reconnect.
+- [ ] Mint API keys **without** naming scopes, so new scopes are picked up automatically.
 
 ---
 
@@ -280,11 +320,16 @@ Worth resolving before anyone builds a production client:
    published, so clients cannot verify the credential they are issued.
 5. **Is the `integrityToken` ever validated?** Currently required but unchecked. Clients need to
    know whether to invest in producing a real one.
-6. **Is there a way to fund a test ledger?** Live pre-authorization is unreachable from a client
-   without one, so no integrator can exercise steps 6 onward against the real API.
-7. **Is chain truncation an accepted limitation?** See §5c. If the answer is "settlement catches it",
+6. **`GET /v1/transactions` returns `500` on every call.** No parameters, `page`, `limit`, any
+   combination — always `500 Oops! An error occurred`. The key holds `transactions:read`, and a `403`
+   would look different, so this is server-side. It is currently the only way to list money movements.
+7. **The `transactionId` from `/payments/sync` is not resolvable.** Feeding it straight back to
+   `GET /v1/transactions/{id}` returns `404 Transaction not found`. It looks like sync echoes the
+   *offline* `Transaction.transaction_id` while the lookup expects a ledger id — and with the list
+   endpoint down there is no way to discover the latter. Either alias the offline id or return both.
+8. **Is chain truncation an accepted limitation?** See §5c. If the answer is "settlement catches it",
    the docs should say so where they describe the replay.
-8. **Publish the custom binding in the API reference.** It is the one thing no integrator can
+9. **Publish the custom binding in the API reference.** It is the one thing no integrator can
    guess, and none of it appears in the docs today.
 
 ---

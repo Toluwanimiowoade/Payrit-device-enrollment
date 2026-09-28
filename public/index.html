@@ -68,6 +68,24 @@
 
     <section class="card">
       <header>
+        <h2>Institution wallet</h2>
+        <span class="spacer"></span>
+        <span class="pill" id="wallet-state">—</span>
+      </header>
+      <div class="body" id="wallet-body">
+        <p class="hint">Reading balances…</p>
+      </div>
+      <form class="setupform" id="fund-form">
+        <input id="fund-amount" type="number" min="1" placeholder="Amount (minor units)" value="200000">
+        <select id="fund-currency">
+          <option>NGN</option><option>USDC</option><option>USDT</option><option>KES</option><option>GHS</option>
+        </select>
+        <button type="submit" id="fund-btn">Fund wallet</button>
+      </form>
+    </section>
+
+    <section class="card">
+      <header>
         <h2>On the wire</h2>
         <span class="spacer"></span>
         <span class="pill" id="event-count">0 calls</span>

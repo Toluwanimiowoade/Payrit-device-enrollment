@@ -10,6 +10,9 @@ var app = {
   screen: null,
   selectedDeviceId: null,
   handshake: null,
+  wallet: null,
+  enrolFor: null,
+  addingCustomer: false,
   raw: false,
   pollTimer: null,
   pollDelay: 1200
@@ -80,6 +83,7 @@ function activeDevice() {
 function currentScreen() {
   var s = app.state;
   if (!s || !s.key.present) return "waiting";
+  if (app.addingCustomer) return "signup";
   if (!s.customer) return "signup";
   if (!devices().length) return "secure";
   if (app.screen === "enroll") return "secure";
@@ -165,6 +169,8 @@ function createCustomer(form) {
         return refreshState();
       }
       app.state = r.json;
+      app.addingCustomer = false;
+      app.screen = null;
       render();
     })
     .catch(function (err) {
@@ -177,7 +183,10 @@ function createCustomer(form) {
 function enroll(platform, currency) {
   app.banner = null;
   setBusy("enroll");
-  api("/api/enroll", { method: "POST", body: { mode: app.mode, platform: platform, currency: currency } })
+  api("/api/enroll", {
+    method: "POST",
+    body: { mode: app.mode, platform: platform, currency: currency, customerId: app.enrolFor || undefined }
+  })
     .then(function (r) {
       app.busy = null;
       if (!r.ok) {
@@ -356,22 +365,41 @@ function renderPhone() {
   }
 
   if (screen === "devices") {
-    var list = devices();
+    var customers = (app.state.customers && app.state.customers.length)
+      ? app.state.customers
+      : app.state.customer
+      ? [app.state.customer]
+      : [];
+    var out = app.state.outbox || [];
+
     html += [
-      "<h3>Your devices</h3>",
-      '<p class="lead">' + list.length + (list.length === 1 ? " device is" : " devices are") +
-        " enrolled to this customer. Each holds its own hardware key and its own spend cap.</p>",
-      '<div class="devlist">',
-      list
-        .map(function (d) {
-          return deviceRow(d);
+      "<h3>Devices on this account</h3>",
+      '<p class="lead">' + customers.length + (customers.length === 1 ? " customer" : " customers") +
+        ", " + devices().length + (devices().length === 1 ? " device" : " devices") +
+        ". A payment moves between two of them, offline.</p>",
+      out.length ? outboxStrip(out) : "",
+      customers
+        .map(function (c) {
+          var mine = devices().filter(function (d) {
+            return d.customerId === c._id;
+          });
+          return [
+            '<div class="custgroup">',
+            '<div class="custhead"><b>' + esc([c.firstName, c.lastName].filter(Boolean).join(" ")) + "</b>",
+            "<small>" + esc(short(c._id, 8, 4)) + "</small></div>",
+            mine.length
+              ? '<div class="devlist">' + mine.map(deviceRow).join("") + "</div>"
+              : '<p class="hintline">No device yet.</p>',
+            '<button type="button" class="linkbtn" data-enroll="' + esc(c._id) + '">+ Enrol a device for ' +
+              esc(c.firstName) + "</button>",
+            "</div>"
+          ].join("");
         })
         .join(""),
-      "</div>",
       '<div class="ctas">',
-      '<button type="button" class="cta accent" id="do-add">Add another device</button>',
-      liveDevices().length >= 2
-        ? '<button type="button" class="cta secondary" id="do-pay">Pay another device</button>'
+      '<button type="button" class="cta secondary" id="do-addcustomer">Add another customer</button>',
+      payableDevices().length >= 2
+        ? '<button type="button" class="cta accent" id="do-pay">Pay another device</button>'
         : "",
       "</div>"
     ].join("");
@@ -443,6 +471,26 @@ function phoneSvg() {
     '<rect x="6" y="2" width="12" height="20" rx="2.5"/>',
     '<path d="M10.5 18.5h3"/>',
     "</svg>"
+  ].join("");
+}
+
+function payableDevices() {
+  return liveDevices();
+}
+
+function outboxStrip(out) {
+  var total = out.reduce(function (sum, o) {
+    return sum + Number(o.amount || 0);
+  }, 0);
+  return [
+    '<div class="outbox">',
+    '<div class="outboxhead"><span class="offdot"></span><b>' + out.length +
+      " payment" + (out.length === 1 ? "" : "s") + " held offline</b></div>",
+    '<p class="hintline">' + total + " " + esc(out[0].currency || "") +
+      " signed on the devices and not yet seen by Payrit.</p>",
+    '<button type="button" class="cta secondary" id="do-sync"' + (app.busy === "sync" ? " disabled" : "") + ">" +
+      (app.busy === "sync" ? "Uploading…" : "Reconnect and sync") + "</button>",
+    "</div>"
   ].join("");
 }
 
@@ -623,6 +671,7 @@ function wirePhone(screen) {
     $("do-enroll").addEventListener("click", function () {
       app.screen = null;
       enroll($("f-platform").value, $("f-currency").value);
+      app.enrolFor = null;
     });
   }
 
@@ -632,9 +681,21 @@ function wirePhone(screen) {
         goTo("device", row.getAttribute("data-device"));
       });
     });
-    $("do-add").addEventListener("click", function () {
-      goTo("enroll");
+    Array.prototype.forEach.call(document.querySelectorAll("[data-enroll]"), function (b) {
+      b.addEventListener("click", function () {
+        app.enrolFor = b.getAttribute("data-enroll");
+        goTo("enroll");
+      });
     });
+    var addCustomer = $("do-addcustomer");
+    if (addCustomer) {
+      addCustomer.addEventListener("click", function () {
+        app.addingCustomer = true;
+        goTo("signup");
+      });
+    }
+    var sync = $("do-sync");
+    if (sync) sync.addEventListener("click", reconnect);
     var pay = $("do-pay");
     if (pay) {
       pay.addEventListener("click", function () {
@@ -687,11 +748,101 @@ function updateHint(screen) {
     waiting: "The phone is idle until the institution has an API key — every enrollment call is authenticated as the institution, never as the customer.",
     signup: "POST /v1/customers. Devices enroll against a customer, so this record has to exist first.",
     secure: "One tap runs POST /v1/enroll/challenge, generates the key, builds the attestation, then POST /v1/enroll.",
-    devices: "One customer, many devices. Each has its own hardware key, its own credential and its own spend cap.",
+    devices: "Customers, their devices, and anything signed offline that Payrit has not seen yet.",
     device: "Refresh proves possession over a fresh nonce. The cap is POST /v1/authorizations, reserved against the wallet.",
     pay: "No network here. Payrit's role ended when the cap was issued — the two devices verify each other with signatures alone."
   };
   $("stage-hint").textContent = hints[screen] || "";
+}
+
+function renderWallet() {
+  var body = $("wallet-body");
+  var label = $("wallet-state");
+  if (!app.wallet) {
+    body.innerHTML = '<p class="hint">Reading balances…</p>';
+    return;
+  }
+  if (!app.wallet.ok) {
+    label.textContent = "unavailable";
+    label.className = "pill bad";
+    body.innerHTML = '<p class="hint">' + esc(app.wallet.message || "Balances could not be read.") + "</p>";
+    return;
+  }
+  var rows = app.wallet.balances.filter(function (r) {
+    return Number(r.ledgerBalance) !== 0 || r.currency === "NGN";
+  });
+  label.textContent = rows.length + " ledger" + (rows.length === 1 ? "" : "s");
+  label.className = "pill";
+  body.innerHTML =
+    '<div class="ledgers">' +
+    rows
+      .map(function (r) {
+        return [
+          '<div class="ledger">',
+          '<span class="lname">' + esc(r.name) + " · " + esc(r.currency) + "</span>",
+          '<span class="lamt">' + esc(r.availableBalance) + "</span>",
+          "</div>"
+        ].join("");
+      })
+      .join("") +
+    "</div>" +
+    '<p class="hint">A pre-authorization moves funds from <b>wallet</b> into <b>withheld</b>. Syncing an offline payment settles it out of the hold.</p>';
+}
+
+function loadWallet() {
+  api("/api/wallet")
+    .then(function (r) {
+      app.wallet = r.json;
+      renderWallet();
+    })
+    .catch(function () {
+    });
+}
+
+function fundWallet(event) {
+  event.preventDefault();
+  $("fund-btn").disabled = true;
+  api("/api/wallet/fund", {
+    method: "POST",
+    body: { amount: $("fund-amount").value, currency: $("fund-currency").value }
+  })
+    .then(function (r) {
+      $("fund-btn").disabled = false;
+      if (r.json.state) app.state = r.json.state;
+      if (!r.ok || r.json.ok === false) fail(r.json.message || "Funding failed", null, r.json.status);
+      else inform("good", "Wallet funded.");
+      loadWallet();
+      render();
+    })
+    .catch(function (err) {
+      $("fund-btn").disabled = false;
+      fail(err.message);
+      render();
+    });
+}
+
+function reconnect() {
+  app.banner = null;
+  setBusy("sync");
+  api("/api/sync", { method: "POST" })
+    .then(function (r) {
+      app.busy = null;
+      if (r.json.state) app.state = r.json.state;
+      if (!r.ok || r.json.ok === false) {
+        fail(r.json.message || "Sync failed", null, r.json.status);
+      } else if (r.json.uploaded) {
+        inform("good", r.json.uploaded + " offline payment" + (r.json.uploaded === 1 ? "" : "s") + " uploaded and posted to the ledger.");
+      } else {
+        inform("info", "Nothing waiting to sync.");
+      }
+      loadWallet();
+      render();
+    })
+    .catch(function (err) {
+      app.busy = null;
+      fail(err.message);
+      render();
+    });
 }
 
 function renderSetup() {
@@ -886,6 +1037,7 @@ function tick() {
 
 function render() {
   renderSetup();
+  renderWallet();
   renderPhone();
   tick();
 }
@@ -919,6 +1071,7 @@ function checkHealth() {
 $("mode-simulated").addEventListener("click", function () { setMode("simulated"); });
 $("mode-live").addEventListener("click", function () { setMode("live"); });
 $("bootstrap-form").addEventListener("submit", bootstrap);
+$("fund-form").addEventListener("submit", fundWallet);
 $("reset").addEventListener("click", resetSession);
 $("toggle-raw").addEventListener("click", function () {
   app.raw = !app.raw;
@@ -933,7 +1086,10 @@ $("clear-log").addEventListener("click", function () {
 });
 
 readHash();
-refreshState().then(checkHealth);
+refreshState().then(function () {
+  checkHealth();
+  loadWallet();
+});
 schedulePoll(POLL_MIN_MS);
 document.addEventListener("visibilitychange", function () {
   if (!document.hidden) {

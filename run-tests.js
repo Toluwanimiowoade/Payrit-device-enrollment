@@ -85,6 +85,21 @@ function checkSpec() {
         }));
       ok("the cap is a decimal string in minor units", /minor currency units/.test(authDto));
       ok("authorizations have their own scopes", text.indexOf("authorizations:write") !== -1);
+
+      ["/v1/wallet/balances", "/v1/wallet/fund", "/v1/payments/sync", "/v1/transactions"].forEach(function (path) {
+        ok("documents " + path, text.indexOf(path + ":") !== -1);
+      });
+      var fundDto = text.slice(text.indexOf("FundWalletDto:"), text.indexOf("SignedTransactionRecordDto:"));
+      ok("funding is idempotent on a correlationId", /correlationId/.test(fundDto) && /idempotency key/i.test(fundDto));
+      var syncDto = text.slice(text.indexOf("SignedTransactionRecordDto:"));
+      ok("a synced record carries both signatures",
+        /payerSignature/.test(syncDto) && /receiverSignature/.test(syncDto));
+      ok("the receiver signature covers the record plus the payer signature",
+        /followed by payerSignature/.test(syncDto));
+      ok("a sync batch is capped at 100 records", /maxItems: 100/.test(syncDto));
+      ["wallet:read", "wallet:write", "payments:write", "transactions:read"].forEach(function (scope) {
+        ok("scope " + scope + " exists", text.indexOf(scope) !== -1);
+      });
       ok("refresh is proved with a raw ES256 (ieee-p1363) signature over the nonce", /ieee-p1363/.test(text));
       ok("device key is a P-256 SubjectPublicKeyInfo", /P-256 SubjectPublicKeyInfo/.test(text));
       ok(
@@ -346,6 +361,10 @@ function checkOfflineHandshake() {
   );
   var parsedAuth = preauth.parse(issued.preAuthorization);
   ok("it decodes back to the cap it was issued for", parsedAuth.cap === 10000 && parsedAuth.currency === "NGN");
+  ok(
+    "the field layout matches a live PreAuthorization: 4 is the cap, 5 the currency",
+    parsedAuth.cap === 10000 && parsedAuth.currency === "NGN" && !!parsedAuth.expiresAt
+  );
   ok(
     "a tampered pre-authorization is rejected",
     !preauth.verifySignature(Buffer.from("not the same bytes", "utf8"), issued.signature)

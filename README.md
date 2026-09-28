@@ -91,6 +91,17 @@ Both are settable via `PAYRIT_ANDROID_BINDING` and `PAYRIT_ANDROID_APPID_LOCATIO
 A customer can enroll as many devices as you like — the phone lists them, each with its own hardware key,
 its own credential and its own spend cap. Pick one to refresh it, revoke it, or reserve a cap against it.
 
+## Two customers, a payment, and reconnecting
+
+The phone groups devices by customer, so a payment is what it would be in real life: one customer's phone
+paying another's. Add customers, enrol a device under each, reserve a cap on the payer, and pay.
+
+Anything signed offline collects in an outbox the phone shows as *held offline* — nothing has reached
+Payrit. **Reconnect and sync** uploads it all to `POST /v1/payments/sync`, and the institution wallet panel
+shows the hold settling: funds leave *withheld* only once the signed records arrive.
+
+The whole loop runs against the live deployment: fund, authorize, pay offline, reconnect, settle.
+
 ## The offline handshake
 
 With two live devices and a cap on the payer, **Pay another device** runs the handshake the docs specify.
@@ -206,6 +217,9 @@ The harness's own routes, all called by the page:
 | `POST /api/preauth` | `POST /v1/authorizations` — reserves a spend cap. |
 | `POST /api/preauth/revoke` | `POST /v1/authorizations/{id}/revoke`. |
 | `POST /api/handshake` | Runs the offline handshake between two enrolled devices. No network involved. |
+| `GET /api/wallet` | `GET /v1/wallet/balances`. |
+| `POST /api/wallet/fund` | `POST /v1/wallet/fund`. |
+| `POST /api/sync` | `POST /v1/payments/sync` — uploads everything signed while offline. |
 | `GET /api/state` | Account, key prefix, customer, devices. Never a raw secret. |
 | `GET /api/events` | Everything on the wire so far. |
 | `POST /api/reset` | Drops `.runtime.json` and the log. The Payrit-side records stay. |
