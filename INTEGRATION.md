@@ -163,8 +163,9 @@ DER-wrapped signature.
 
 `POST /v1/authorizations` reserves a spend cap. Two prerequisites:
 
-**Scopes.** The scope list has grown twice — `authorizations:*`, then `wallet:*`, `payments:write` and
-`transactions:read`. A key minted before a scope existed does not have it and gets `403 API key is missing
+**Scopes.** The scope list has grown three times — `authorizations:*`, then `wallet:*`, `payments:write` and
+`transactions:read`, then `webhooks:*` and `settlements:read`. A bootstrap key now comes back with the
+single scope `"*"` rather than an enumerated list, which is the same thing said more briefly. A key minted before a scope existed does not have it and gets `403 API key is missing
 a required scope`. **Mint keys without a `scopes` field**: the DTO says it "defaults to every scope when
 omitted", so an omitted list keeps working as the API grows. Naming scopes explicitly is what leaves you
 stranded later.
@@ -254,6 +255,30 @@ what is actually enforced offline is "no *disclosed* spending exceeds the cap."
 
 ---
 
+## 5e. Reading the ledger back
+
+`GET /v1/transactions` lists money movements, newest first. Note the envelope: the rows are under
+**`data.transactions`**, not `data` directly — easy to misread as an empty list.
+
+```json
+{ "message": "Success", "data": { "transactions": [ … ] } }
+```
+
+One row per movement, with an `activity` of `wallet_funding`, `preauth_hold`, `preauth_release` or
+`ble_payment`, a `status` of `applied`, and a `reference` that identifies the source:
+
+| activity | reference |
+| --- | --- |
+| `wallet_funding` | `wallet-fund:<accountId>…` |
+| `preauth_hold` | `preauth-hold:<authorizationId>` |
+| `ble_payment` | `payment:<offline transaction id>` |
+
+`GET /v1/settlements` lists settlement batches, and `/v1/webhooks` subscribes to events
+(`payment.posted`, `wallet.funded`, `preauthorization.released`, `settlement.batch_created` and others, or
+`*`). A webhook create returns a `secret` once — treat it like the API key.
+
+---
+
 ## 6. Reading the error messages
 
 Each rejection is specific, and the message tells you how far you got. Working through them in
@@ -320,16 +345,15 @@ Worth resolving before anyone builds a production client:
    published, so clients cannot verify the credential they are issued.
 5. **Is the `integrityToken` ever validated?** Currently required but unchecked. Clients need to
    know whether to invest in producing a real one.
-6. **`GET /v1/transactions` returns `500` on every call.** No parameters, `page`, `limit`, any
-   combination — always `500 Oops! An error occurred`. The key holds `transactions:read`, and a `403`
-   would look different, so this is server-side. It is currently the only way to list money movements.
-7. **The `transactionId` from `/payments/sync` is not resolvable.** Feeding it straight back to
-   `GET /v1/transactions/{id}` returns `404 Transaction not found`. It looks like sync echoes the
-   *offline* `Transaction.transaction_id` while the lookup expects a ledger id — and with the list
-   endpoint down there is no way to discover the latter. Either alias the offline id or return both.
-8. **Is chain truncation an accepted limitation?** See §5c. If the answer is "settlement catches it",
+6. **The sync id and the ledger id are different, with nothing to join them but a string prefix.**
+   `POST /v1/payments/sync` returns the *offline* `Transaction.transaction_id`. `GET /v1/transactions/{id}`
+   wants the ledger row's `_id` and returns `404` for the sync id. The only link is the ledger row's
+   `reference`, formatted `payment:<offline id>` — and `?correlationId=<offline id>` does not match it.
+   So the ledger row for a payment you just synced can only be found by listing and string-matching.
+   Either accept the offline id on the lookup, or let `correlationId` filter on it.
+7. **Is chain truncation an accepted limitation?** See §5c. If the answer is "settlement catches it",
    the docs should say so where they describe the replay.
-9. **Publish the custom binding in the API reference.** It is the one thing no integrator can
+8. **Publish the custom binding in the API reference.** It is the one thing no integrator can
    guess, and none of it appears in the docs today.
 
 ---

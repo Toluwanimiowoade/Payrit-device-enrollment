@@ -97,9 +97,20 @@ function checkSpec() {
       ok("the receiver signature covers the record plus the payer signature",
         /followed by payerSignature/.test(syncDto));
       ok("a sync batch is capped at 100 records", /maxItems: 100/.test(syncDto));
-      ["wallet:read", "wallet:write", "payments:write", "transactions:read"].forEach(function (scope) {
+      ["wallet:read", "wallet:write", "payments:write", "transactions:read",
+       "webhooks:read", "webhooks:write", "settlements:read"].forEach(function (scope) {
         ok("scope " + scope + " exists", text.indexOf(scope) !== -1);
       });
+
+      ["/v1/webhooks", "/v1/webhooks/{id}/rotate", "/v1/webhooks/{id}/deliveries", "/v1/settlements"].forEach(
+        function (path) {
+          ok("documents " + path, text.indexOf(path + ":") !== -1);
+        }
+      );
+      var hookDto = text.slice(text.indexOf("CreateWebhookDto:"));
+      ok("a webhook subscribes to named events or *", /payment.posted/.test(hookDto) && /"\*"|'\*'/.test(hookDto));
+      ok("webhook targets must be https", /HTTPS endpoint/.test(hookDto));
+      ok("transactions can be filtered by correlationId", /name: correlationId/.test(text));
       ok("refresh is proved with a raw ES256 (ieee-p1363) signature over the nonce", /ieee-p1363/.test(text));
       ok("device key is a P-256 SubjectPublicKeyInfo", /P-256 SubjectPublicKeyInfo/.test(text));
       ok(

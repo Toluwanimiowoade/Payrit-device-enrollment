@@ -517,3 +517,23 @@ a { color: var(--accent); }
 }
 .lname { font-size: 12px; color: var(--muted); }
 .lamt { font-family: var(--mono); font-size: 13px; color: var(--text); }
+
+.ledgerrows { display: flex; flex-direction: column; gap: 6px; }
+.lrow {
+  display: grid;
+  grid-template-columns: minmax(0,1.2fr) minmax(0,1.4fr) auto auto;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--ink-3);
+  font-size: 12px;
+}
+.lact { color: var(--text); }
+.lref { font-family: var(--mono); font-size: 11px; color: var(--faint); overflow: hidden; text-overflow: ellipsis; }
+.lval { font-family: var(--mono); color: var(--text); text-align: right; white-space: nowrap; }
+@media (max-width: 640px) {
+  .lrow { grid-template-columns: 1fr auto; }
+  .lref { display: none; }
+}

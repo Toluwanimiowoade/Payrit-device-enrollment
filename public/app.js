@@ -11,6 +11,7 @@ var app = {
   selectedDeviceId: null,
   handshake: null,
   wallet: null,
+  ledger: null,
   enrolFor: null,
   addingCustomer: false,
   raw: false,
@@ -794,6 +795,7 @@ function loadWallet() {
     .then(function (r) {
       app.wallet = r.json;
       renderWallet();
+  renderLedger();
     })
     .catch(function () {
     });
@@ -845,6 +847,70 @@ function reconnect() {
     });
 }
 
+var ACTIVITY = {
+  wallet_funding: "Wallet funded",
+  preauth_hold: "Pre-authorization hold",
+  preauth_release: "Hold released",
+  ble_payment: "Offline payment"
+};
+
+function renderLedger() {
+  var body = $("ledger-body");
+  var label = $("ledger-state");
+  if (!app.ledger) return;
+
+  if (!app.ledger.ok) {
+    label.textContent = "unavailable";
+    label.className = "pill bad";
+    body.innerHTML = '<p class="hint">' + esc(app.ledger.message || "Could not read the ledger.") + "</p>";
+    return;
+  }
+
+  var rows = app.ledger.transactions || [];
+  label.textContent = rows.length + " movement" + (rows.length === 1 ? "" : "s");
+  label.className = "pill";
+
+  if (!rows.length) {
+    body.innerHTML = '<p class="hint">Nothing posted yet. Fund the wallet, reserve a cap, then sync an offline payment.</p>';
+    return;
+  }
+
+  body.innerHTML =
+    '<div class="ledgerrows">' +
+    rows
+      .map(function (t) {
+        return [
+          '<div class="lrow">',
+          '<span class="lact">' + esc(ACTIVITY[t.activity] || t.activity) + "</span>",
+          '<span class="lref">' + esc(short(String(t.reference || ""), 26, 6)) + "</span>",
+          '<span class="lval">' + esc(String(t.amount || "")) + " " + esc(t.currency || "") + "</span>",
+          '<span class="pillsm' + (t.status === "applied" ? " ok" : "") + '">' + esc(t.status || "") + "</span>",
+          "</div>"
+        ].join("");
+      })
+      .join("") +
+    "</div>" +
+    (app.ledger.settlements.length
+      ? '<p class="hint">' + app.ledger.settlements.length + " settlement report(s).</p>"
+      : '<p class="hint">No settlement batches yet.</p>');
+}
+
+function loadLedger() {
+  api("/api/ledger")
+    .then(function (r) {
+      app.ledger = r.json;
+      renderLedger();
+    })
+    .catch(function () {
+    });
+}
+
+function scopeLabel(scopes) {
+  if (!scopes || !scopes.length) return "";
+  if (scopes.indexOf("*") !== -1) return " · all scopes";
+  return " · " + scopes.length + " scope" + (scopes.length === 1 ? "" : "s");
+}
+
 function renderSetup() {
   var s = app.state;
   var account = s && s.account;
@@ -867,9 +933,7 @@ function renderSetup() {
     {
       title: configuredKey ? "API key from configuration" : "Mint the bootstrap API key",
       route: configuredKey ? "PAYRIT_API_KEY" : "POST /v1/accounts/{id}/api-keys",
-      value: key
-        ? key.prefix + (key.environment ? " · " + key.environment : "") + (key.scopes ? " · " + key.scopes.length + " scopes" : "")
-        : null
+      value: key ? key.prefix + (key.environment ? " · " + key.environment : "") + scopeLabel(key.scopes) : null
     },
     {
       title: "Create a customer",
@@ -1038,6 +1102,7 @@ function tick() {
 function render() {
   renderSetup();
   renderWallet();
+  renderLedger();
   renderPhone();
   tick();
 }
@@ -1089,6 +1154,7 @@ readHash();
 refreshState().then(function () {
   checkHealth();
   loadWallet();
+  loadLedger();
 });
 schedulePoll(POLL_MIN_MS);
 document.addEventListener("visibilitychange", function () {

@@ -220,6 +220,7 @@ The harness's own routes, all called by the page:
 | `GET /api/wallet` | `GET /v1/wallet/balances`. |
 | `POST /api/wallet/fund` | `POST /v1/wallet/fund`. |
 | `POST /api/sync` | `POST /v1/payments/sync` — uploads everything signed while offline. |
+| `GET /api/ledger` | Transactions, settlement reports and webhook subscriptions. |
 | `GET /api/state` | Account, key prefix, customer, devices. Never a raw secret. |
 | `GET /api/events` | Everything on the wire so far. |
 | `POST /api/reset` | Drops `.runtime.json` and the log. The Payrit-side records stay. |
