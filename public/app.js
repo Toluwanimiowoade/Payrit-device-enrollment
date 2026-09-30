@@ -400,7 +400,7 @@ function renderPhone() {
       '<div class="ctas">',
       '<button type="button" class="cta secondary" id="do-addcustomer">Add another customer</button>',
       payableDevices().length >= 2
-        ? '<button type="button" class="cta accent" id="do-pay">Pay another device</button>'
+        ? '<button type="button" class="cta accent" id="do-pay">Start an offline payment</button>'
         : "",
       "</div>"
     ].join("");
@@ -417,7 +417,8 @@ function renderPhone() {
       kv("Platform", device.platform),
       kv("Key fingerprint", short(device.fingerprint, 10, 6)),
       "</div>",
-      preauthPanel(device)
+      preauthPanel(device),
+      transactionsPanel(device)
     ].join("");
 
     if (!device.revokedAt) {
@@ -425,6 +426,9 @@ function renderPhone() {
         '<div class="ctas">',
         '<button type="button" class="cta secondary" id="do-refresh"' + (app.busy === "refresh" ? " disabled" : "") + ">" +
           (app.busy === "refresh" ? "Refreshing…" : "Refresh credential") + "</button>",
+        device.authorization && device.authorization.status === "active" && liveDevices().length >= 2
+          ? '<button type="button" class="cta accent" id="do-payfrom">Start an offline payment</button>'
+          : "",
         '<button type="button" class="cta danger" id="do-revoke"' + (app.busy === "revoke" ? " disabled" : "") + ">" +
           (app.busy === "revoke" ? "Revoking…" : "Report this device lost") + "</button>",
         "</div>"
@@ -536,6 +540,48 @@ function deviceRow(d) {
     "</span>",
     '<span class="devtags">' + status + cap + "</span>",
     "</button>"
+  ].join("");
+}
+
+function syncStateFor(state) {
+  var pending = (state.outbox || []).length;
+  var done = state.syncedCount || 0;
+  var bad = state.rejectedCount || 0;
+  return { pending: pending, done: done, bad: bad };
+}
+
+function transactionsPanel(device) {
+  var list = device.transactions || [];
+  if (!list.length) {
+    return [
+      '<div class="panel">',
+      '<div class="panelhead">Offline transactions</div>',
+      '<p class="hintline">Nothing signed on this device yet. Reserve a cap, then start an offline payment.</p>',
+      "</div>"
+    ].join("");
+  }
+  return [
+    '<div class="panel">',
+    '<div class="panelhead">Offline transactions <span class="pillsm">' + list.length + "</span></div>",
+    '<div class="txlist">',
+    list
+      .slice()
+      .reverse()
+      .map(function (t) {
+        return [
+          '<div class="txrow">',
+          '<span class="txseq">#' + t.sequenceNumber + "</span>",
+          '<span class="txmain"><b>' + t.amount + " " + esc(t.currency) + "</b>",
+          "<small>to " + esc(short(t.receiverDeviceId || "", 8, 4)) + " · " +
+            esc(String(t.timestamp || "").slice(11, 19)) + "</small></span>",
+          '<span class="txrun">' + t.runningConsumed + " used</span>",
+          "</div>"
+        ].join("");
+      })
+      .join(""),
+    "</div>",
+    '<p class="hintline">Each one is signed by both devices and chained to the one before it.</p>',
+    "</div>"
   ].join("");
 }
 
@@ -740,6 +786,14 @@ function wirePhone(screen) {
 
     var revoke = $("do-revoke");
     if (revoke) revoke.addEventListener("click", function () { lifecycle("revoke", device.deviceId); });
+
+    var payFrom = $("do-payfrom");
+    if (payFrom) {
+      payFrom.addEventListener("click", function () {
+        app.handshake = null;
+        goTo("pay", device.deviceId);
+      });
+    }
 
     var add = $("do-add");
     if (add) add.addEventListener("click", function () { goTo("enroll"); });

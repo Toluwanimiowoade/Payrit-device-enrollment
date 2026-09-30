@@ -100,6 +100,10 @@ Anything signed offline collects in an outbox the phone shows as *held offline* 
 Payrit. **Reconnect and sync** uploads it all to `POST /v1/payments/sync`, and the institution wallet panel
 shows the hold settling: funds leave *withheld* only once the signed records arrive.
 
+Sync reports each record's outcome. Payrit only settles records whose PreAuthorization it issued, so
+records from **simulated** devices come back rejected — enrol in Live mode and reserve a live cap for the
+loop to close. Rejected records are kept, not discarded.
+
 The whole loop runs against the live deployment: fund, authorize, pay offline, reconnect, settle.
 
 ## The offline handshake

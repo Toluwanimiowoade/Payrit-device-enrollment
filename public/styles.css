@@ -537,3 +537,14 @@ a { color: var(--accent); }
   .lrow { grid-template-columns: 1fr auto; }
   .lref { display: none; }
 }
+
+.txlist { display: flex; flex-direction: column; gap: 6px; }
+.txrow {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 10px; border: 1px solid var(--paper-line); border-radius: 9px; background: #fbfbfd;
+}
+.txseq { font-family: var(--mono); font-size: 11px; color: var(--paper-muted); flex: 0 0 auto; }
+.txmain { display: flex; flex-direction: column; flex: 1; min-width: 0; }
+.txmain b { font-size: 13px; }
+.txmain small { font-size: 11px; color: var(--paper-muted); font-family: var(--mono); }
+.txrun { font-size: 11px; color: var(--paper-muted); font-family: var(--mono); flex: 0 0 auto; }
