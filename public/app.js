@@ -417,6 +417,7 @@ function renderPhone() {
       kv("Platform", device.platform),
       kv("Key fingerprint", short(device.fingerprint, 10, 6)),
       "</div>",
+      receivedPanel(device),
       preauthPanel(device),
       transactionsPanel(device)
     ].join("");
@@ -531,6 +532,9 @@ function deviceRow(d) {
   var cap = auth
     ? '<span class="pillsm">' + auth.remaining + "/" + auth.cap + " " + esc(auth.currency) + "</span>"
     : '<span class="pillsm muted">no cap</span>';
+  var inbound = d.receivedTotal
+    ? '<span class="pillsm ok">+' + d.receivedTotal + "</span>"
+    : "";
   return [
     '<button type="button" class="devrow" data-device="' + esc(d.deviceId) + '">',
     '<span class="devicon">' + phoneSvg() + "</span>",
@@ -538,7 +542,7 @@ function deviceRow(d) {
     "<b>" + esc(d.platform === "ios" ? "iPhone" : "Android") + "</b>",
     "<small>" + esc(short(d.deviceId, 8, 4)) + " · " + esc(d.origin) + "</small>",
     "</span>",
-    '<span class="devtags">' + status + cap + "</span>",
+    '<span class="devtags">' + status + cap + inbound + "</span>",
     "</button>"
   ].join("");
 }
@@ -548,6 +552,35 @@ function syncStateFor(state) {
   var done = state.syncedCount || 0;
   var bad = state.rejectedCount || 0;
   return { pending: pending, done: done, bad: bad };
+}
+
+function receivedPanel(device) {
+  var list = device.received || [];
+  if (!list.length) return "";
+  return [
+    '<div class="panel received">',
+    '<div class="panelhead">Received offline <span class="pillsm ok">' + list.length + "</span></div>",
+    '<div class="capnums"><b>' + (device.receivedTotal || 0) + "</b> " +
+      esc((list[0] && list[0].currency) || "") + " taken in, not yet settled</div>",
+    '<div class="txlist">',
+    list
+      .slice()
+      .reverse()
+      .map(function (t) {
+        return [
+          '<div class="txrow">',
+          '<span class="txseq">in</span>',
+          '<span class="txmain"><b>+' + t.amount + " " + esc(t.currency) + "</b>",
+          "<small>from " + esc(short(t.fromDeviceId || "", 8, 4)) + " · " +
+            esc(String(t.timestamp || "").slice(11, 19)) + "</small></span>",
+          "</div>"
+        ].join("");
+      })
+      .join(""),
+    "</div>",
+    '<p class="hintline">This device holds each record countersigned by both sides. The money reaches the ledger when someone syncs.</p>',
+    "</div>"
+  ].join("");
 }
 
 function transactionsPanel(device) {

@@ -548,3 +548,5 @@ a { color: var(--accent); }
 .txmain b { font-size: 13px; }
 .txmain small { font-size: 11px; color: var(--paper-muted); font-family: var(--mono); }
 .txrun { font-size: 11px; color: var(--paper-muted); font-family: var(--mono); flex: 0 0 auto; }
+
+.panel.received { border-color: #cdf2e2; background: #f6fffb; }

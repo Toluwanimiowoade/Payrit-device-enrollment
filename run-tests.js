@@ -425,6 +425,35 @@ function checkOfflineHandshake() {
   ok("spending past the cap is refused", !over.ok);
   ok("and says why", /remains of the/.test(over.reason || ""));
 
+  var crypto = require("crypto");
+  function verifyWith(spkiB64, bytes, sigB64) {
+    var lines = spkiB64.match(/.{1,64}/g) || [];
+    var pem = "-----BEGIN PUBLIC KEY-----\n" + lines.join("\n") + "\n-----END PUBLIC KEY-----\n";
+    return crypto.verify(
+      "sha256",
+      bytes,
+      { key: crypto.createPublicKey({ key: pem, format: "pem", type: "spki" }), dsaEncoding: "ieee-p1363" },
+      Buffer.from(sigB64, "base64")
+    );
+  }
+  var firstBytes = Buffer.from(first.entry.record, "base64");
+  ok(
+    "the payer signature on the record verifies against the payer key",
+    verifyWith(payer.publicKey, firstBytes, first.entry.payerSignature)
+  );
+  ok(
+    "the payee countersignature covers the record plus the payer signature",
+    verifyWith(
+      payee.publicKey,
+      Buffer.concat([firstBytes, Buffer.from(first.entry.payerSignature, "base64")]),
+      first.entry.receiverSignature
+    )
+  );
+  ok(
+    "the countersignature does not verify over the record alone",
+    !verifyWith(payee.publicKey, firstBytes, first.entry.receiverSignature)
+  );
+
   var replay = ble.replayChain(payer, chain);
   ok("an untouched chain replays cleanly", replay.problems.length === 0);
   ok("the replayed total matches the records", replay.consumed === 5500);
