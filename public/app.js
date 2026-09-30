@@ -435,29 +435,33 @@ function renderPhone() {
   }
 
   if (screen === "pay") {
+    var all = liveDevices();
     var payer = activeDevice();
-    var others = liveDevices().filter(function (d) {
+    if (!payer || payer.revokedAt) payer = all[0];
+    var others = all.filter(function (d) {
       return d.deviceId !== payer.deviceId;
     });
+    var auth = payer && payer.authorization;
+
     html += [
       '<button type="button" class="backlink" id="do-back">‹ All devices</button>',
       "<h3>Tap to pay</h3>",
       '<p class="lead">Both phones are offline. They exchange signed messages over Bluetooth and verify each other with no network at all.</p>',
-      '<div class="field"><label for="f-payee">Pay which device</label><select id="f-payee">' +
-        others
-          .map(function (d) {
-            return '<option value="' + esc(d.deviceId) + '">' + esc(d.platform) + " · " + esc(short(d.deviceId, 8, 4)) + "</option>";
-          })
-          .join("") +
+      '<div class="field"><label for="f-payer">From</label><select id="f-payer">' +
+        all.map(function (d) { return deviceOption(d, d.deviceId === payer.deviceId); }).join("") +
+        "</select></div>",
+      '<div class="field"><label for="f-payee">To</label><select id="f-payee">' +
+        others.map(function (d) { return deviceOption(d, false); }).join("") +
         "</select></div>",
       '<div class="field"><label for="f-amount">Amount (minor units)</label><input id="f-amount" type="number" min="1" value="2500"></div>',
-      payer.authorization
-        ? '<p class="hintline">' + payer.authorization.remaining + " of " + payer.authorization.cap + " " +
-          esc(payer.authorization.currency) + " left on this device\'s cap</p>"
-        : '<p class="hintline">This device needs a pre-authorization before it can pay.</p>',
+      auth && auth.status === "active"
+        ? '<p class="hintline">' + auth.remaining + " of " + auth.cap + " " + esc(auth.currency) + " left on the paying device.</p>"
+        : '<div class="banner err"><b>The paying device has no spend cap.</b><span>Open it from the device list and reserve one before it can pay.</span></div>',
       app.handshake ? handshakeReport(app.handshake) : "",
-      '<button type="button" class="cta accent" id="do-handshake"' + (app.busy === "handshake" ? " disabled" : "") + ">" +
-        (app.busy === "handshake" ? "Handshaking…" : "Start the handshake") + "</button>"
+      '<button type="button" class="cta accent" id="do-handshake"' +
+        (app.busy === "handshake" || !auth || auth.status !== "active" ? " disabled" : "") + ">" +
+        (app.busy === "handshake" ? "Handshaking…" : "Start the handshake") +
+        "</button>"
     ].join("");
   }
 
@@ -472,6 +476,26 @@ function phoneSvg() {
     '<rect x="6" y="2" width="12" height="20" rx="2.5"/>',
     '<path d="M10.5 18.5h3"/>',
     "</svg>"
+  ].join("");
+}
+
+function customerName(id) {
+  var found = "";
+  ((app.state && app.state.customers) || []).forEach(function (c) {
+    if (c._id === id) found = c.firstName || "";
+  });
+  return found;
+}
+
+function deviceOption(d, selected) {
+  var who = customerName(d.customerId);
+  var cap = d.authorization && d.authorization.status === "active"
+    ? " · " + d.authorization.remaining + " " + d.authorization.currency
+    : " · no cap";
+  return [
+    '<option value="' + esc(d.deviceId) + '"' + (selected ? " selected" : "") + ">",
+    esc((who ? who + " · " : "") + (d.platform === "ios" ? "iPhone" : "Android") + " " + short(d.deviceId, 6, 4) + cap),
+    "</option>"
   ].join("");
 }
 
@@ -733,13 +757,18 @@ function wirePhone(screen) {
   }
 
   if (screen === "pay") {
-    var payer = activeDevice();
     $("do-back").addEventListener("click", function () {
       app.handshake = null;
       goTo("devices");
     });
+    var payerSelect = $("f-payer");
+    payerSelect.addEventListener("change", function () {
+      app.handshake = null;
+      app.selectedDeviceId = payerSelect.value;
+      render();
+    });
     $("do-handshake").addEventListener("click", function () {
-      runHandshake(payer.deviceId, $("f-payee").value, Number($("f-amount").value));
+      runHandshake(payerSelect.value, $("f-payee").value, Number($("f-amount").value));
     });
   }
 }
